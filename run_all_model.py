@@ -1,196 +1,291 @@
-import streamlit as st
+# run_all_models.py
+import warnings
+warnings.filterwarnings("ignore")
+
 import pandas as pd
 import numpy as np
-import joblib
 import os
-from sklearn.preprocessing import LabelEncoder
-import plotly.graph_objects as go
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
+    mean_squared_error, r2_score, mean_absolute_error,
+    confusion_matrix, ConfusionMatrixDisplay
+)
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.linear_model import LogisticRegression, BayesianRidge, Ridge, Lasso, ElasticNet
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.svm import SVC
+import joblib
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Shark Tank India Deal Predictor", page_icon="🦈", layout="wide")
-st.title("🦈 Shark Tank India — Multi-Model Smart Predictor")
-st.markdown("#### Predict deal success, valuation, and best sharks using all trained models")
+# Try to import xgboost if available
+try:
+    from xgboost import XGBClassifier, XGBRegressor
+    XGBOOST_AVAILABLE = True
+except Exception:
+    XGBOOST_AVAILABLE = False
 
-# ====== Load all trained models ======
-@st.cache_resource
-def load_all_models():
-    model_dict = {"deal": [], "valuation": [], "sharks": []}
-    for file in os.listdir():
-        if file.startswith("best_") and file.endswith(".pkl"):
-            if "_deal" in file:
-                model_dict["deal"].append((file, joblib.load(file)))
-            elif "_valuation" in file:
-                model_dict["valuation"].append((file, joblib.load(file)))
-            elif "_sharks" in file:
-                model_dict["sharks"].append((file, joblib.load(file)))
-    return model_dict
+# --------------------------
+# Load and preprocess data
+# --------------------------
+DATA_FILE = "sharkTankIndia.xlsx"  # change if needed
 
-models = load_all_models()
-st.sidebar.success(f"✅ Loaded {len(models['deal'])} deal models, {len(models['valuation'])} valuation models, {len(models['sharks'])} shark models")
+if not os.path.exists(DATA_FILE):
+    raise FileNotFoundError(f"File not found: {DATA_FILE}")
 
-# ====== Label encoders ======
-@st.cache_data
-def load_encoders():
-    df = pd.read_excel("sharkTankIndia.xlsx")
-    enc = {}
-    for col in ["Industry", "Pitchers City", "Pitchers State"]:
-        le = LabelEncoder()
-        df[col] = df[col].astype(str)
-        le.fit(df[col])
-        enc[col] = le
-    return enc
+df = pd.read_excel(DATA_FILE)
 
-encoders = load_encoders()
+# Quick fixes and new features
+if 'Pitchers Average Age ' in df.columns:
+    df.rename(columns={'Pitchers Average Age ': 'Pitchers Average Age'}, inplace=True)
 
-# ====== Input form ======
-st.divider()
-st.subheader("🧾 Enter Your Pitch Details")
+shark_present_cols = ['Namita Present', 'Vineeta Present', 'Anupam Present', 'Aman Present',
+                      'Peyush Present', 'Ritesh Present', 'Amit Present', 'Guest Present']
+for c in shark_present_cols:
+    if c not in df.columns:
+        df[c] = 0
+df['Num Sharks Present'] = df[shark_present_cols].sum(axis=1)
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    season = st.selectbox("Season", [1, 2, 3])
-    num_presenters = st.slider("No. of Presenters", 1, 5, 2)
-    male_presenters = st.slider("Male Presenters", 0, num_presenters, 1)
-    female_presenters = num_presenters - male_presenters
-    couple_presenters = st.selectbox("Couple Presenters?", [0, 1], format_func=lambda x: "Yes" if x else "No")
-    avg_age = st.slider("Average Age", 18, 70, 35)
+df['Valuation_per_Presenter'] = df['Valuation Requested'] / df['No of Presenters'].replace(0, 1)
+df['Equity_per_Shark'] = df['Original Offered Equity'] / df['Num Sharks Present'].replace(0, 1)
 
-with col2:
-    ask = st.number_input("Ask Amount (₹)", min_value=100000, max_value=100000000, value=5000000, step=100000)
-    equity = st.slider("Equity Offered (%)", 1.0, 50.0, 10.0, 0.5)
-    valuation = ask / (equity / 100)
-    st.metric("Calculated Valuation", f"₹{valuation:,.0f}")
+# Define features and targets
+features = [
+    'Season No', 'Episode No', 'Pitch No', 'No of Presenters', 'Male Presenters',
+    'Female Presenters', 'Couple Presenters', 'Pitchers Average Age',
+    'Pitchers City', 'Pitchers State', 'Original Ask Amount',
+    'Original Offered Equity', 'Valuation Requested', 'Industry',
+    'Num Sharks Present', 'Valuation_per_Presenter', 'Equity_per_Shark'
+]
 
-with col3:
-    industry = st.selectbox("Industry", [
-        'Technology', 'Food & Beverage', 'Fashion', 'Health & Wellness',
-        'Education', 'Agriculture', 'E-commerce', 'Services', 'Manufacturing',
-        'Beauty & Personal Care', 'Sports & Fitness', 'Home & Kitchen'
-    ])
-    state = st.selectbox("State", [
-        'Maharashtra', 'Delhi', 'Karnataka', 'Tamil Nadu', 'Gujarat',
-        'Rajasthan', 'Uttar Pradesh', 'West Bengal', 'Telangana', 'Punjab',
-        'Haryana', 'Kerala', 'Madhya Pradesh', 'Andhra Pradesh'
-    ])
-    city = st.selectbox("City", [
-        'Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Hyderabad',
-        'Ahmedabad', 'Kolkata', 'Pune', 'Jaipur', 'Lucknow',
-        'Surat', 'Indore', 'Chandigarh', 'Kochi'
-    ])
+target_col = 'Accepted Offer'
+target_valuation = 'Deal Valuation'
+shark_investors = [
+    'Namita Investment Amount', 'Vineeta Invested Amount', 'Anupam Investment Amount',
+    'Aman Investment Amount', 'Peyush Investment Amount', 'Ritesh Investment Amount',
+    'Amit Investment Amount', 'Guest Investment Amount'
+]
 
-# Input dataframe
-inp = pd.DataFrame([{
-    'Season No': season,
-    'Episode No': 1,
-    'Pitch No': 1,
-    'No of Presenters': num_presenters,
-    'Male Presenters': male_presenters,
-    'Female Presenters': female_presenters,
-    'Couple Presenters': couple_presenters,
-    'Pitchers Average Age': avg_age,
-    'Pitchers City': city,
-    'Pitchers State': state,
-    'Original Ask Amount': ask,
-    'Original Offered Equity': equity,
-    'Valuation Requested': valuation,
-    'Industry': industry,
-    'Num Sharks Present': 8,
-    'Valuation_per_Presenter': valuation / max(num_presenters, 1),
-    'Equity_per_Shark': equity / 8
-}])
+# Ensure columns exist
+for col in features:
+    if col not in df.columns:
+        df[col] = 0
+for col in shark_investors:
+    if col not in df.columns:
+        df[col] = 0
 
-# Encode categorical
-for col, le in encoders.items():
-    if col in inp.columns:
-        val = inp[col].iloc[0]
-        inp[col] = le.transform([val]) if val in le.classes_ else le.transform([le.classes_[0]])
+# Multi-label shark matrix
+df_sharks = (df[shark_investors].fillna(0) > 0).astype(int)
+df_sharks.columns = [c.split(' ')[0] for c in shark_investors]
 
-# ====== Predict button ======
-st.divider()
-if st.button("🚀 Predict Across All Models"):
-    with st.spinner("Running all trained models..."):
-        # ---------------- DEAL ----------------
-        deal_results = []
-        for file, (clf, scaler) in models["deal"]:
-            Xs = scaler.transform(inp)
-            prob = clf.predict_proba(Xs)[0][1] if hasattr(clf, "predict_proba") else clf.decision_function(Xs)
-            deal_results.append((file, prob))
-        best_deal = max(deal_results, key=lambda x: x[1])
-        deal_prob = best_deal[1] * 100
-        deal_pred = int(deal_prob > 55)
+# Fill missing values
+for col in features:
+    if df[col].dtype == 'object':
+        df[col] = df[col].fillna(df[col].mode().iloc[0])
+    else:
+        df[col] = df[col].fillna(df[col].median())
 
-        # ---------------- VALUATION ----------------
-        val_results = []
-        for file, (reg, scaler) in models["valuation"]:
-            try:
-                pred_val = reg.predict(scaler.transform(inp))[0]
-                val_results.append((file, pred_val))
-            except Exception:
-                pass
-        best_val = np.median([v for _, v in val_results]) if val_results else valuation
+if target_valuation in df.columns:
+    df[target_valuation] = df[target_valuation].fillna(0)
 
-        # ---------------- SHARKS ----------------
-        shark_predictions = {}
-        for file, (clf, scaler) in models["sharks"]:
-            try:
-                y = clf.predict(scaler.transform(inp))[0]
-                shark_predictions[file] = y
-            except Exception:
-                pass
-        sharks_list = ['Namita', 'Vineeta', 'Anupam', 'Aman', 'Peyush', 'Ritesh', 'Amit', 'Guest']
-        final_sharks = []
-        if shark_predictions:
-            arr = np.mean(list(shark_predictions.values()), axis=0)
-            for i, v in enumerate(arr):
-                if v >= 0.5:
-                    final_sharks.append(sharks_list[i])
+df['Valuation_per_Presenter'] = df['Valuation_per_Presenter'].fillna(df['Valuation_per_Presenter'].median())
+df['Equity_per_Shark'] = df['Equity_per_Shark'].fillna(df['Equity_per_Shark'].median())
 
-        # ---------------- RESULTS ----------------
-        st.subheader("🎯 Final AI Predictions (Best of All Models)")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Deal Outcome", "✅ Accepted" if deal_pred else "❌ Unlikely", f"{deal_prob:.1f}%")
-            st.caption(f"Model: {best_deal[0]}")
-        with col2:
-            st.metric("Predicted Valuation", f"₹{best_val:,.0f}")
-        with col3:
-            st.metric("Confidence Level", f"{deal_prob:.1f}%")
+# Encode categorical features
+categorical_cols = [c for c in features if df[c].dtype == 'object']
+label_encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col].astype(str))
+    label_encoders[col] = le
 
-        # Confidence Gauge
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=deal_prob,
-            title={"text": "Deal Confidence (%)"},
-            gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#38ef7d" if deal_prob > 60 else "#f5576c"}}
-        ))
-        st.plotly_chart(fig, use_container_width=True)
+X_all = df[features].copy()
 
-        # Sharks
-        st.markdown("### 🦈 Likely Sharks Interested")
-        if final_sharks:
-            for s in final_sharks:
-                st.success(f"• {s}")
-        else:
-            st.warning("No shark strongly matches this pitch profile.")
+# --------------------------
+# Utilities
+# --------------------------
+def report_classification(name, y_true, y_pred, y_prob=None):
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    roc = roc_auc_score(y_true, y_prob) if (y_prob is not None and len(np.unique(y_true)) > 1) else None
+    return {"model": name, "accuracy": acc, "precision": prec, "recall": rec, "f1": f1, "roc_auc": roc}
 
-        # ---------------- INSIGHTS ----------------
-        st.subheader("📊 AI Suggestions & Insights")
-        suggestions = []
-        if not deal_pred:
-            if equity < 5:
-                suggestions.append("Offer slightly **more equity (5–15%)** to attract investors.")
-            if valuation > 50000000:
-                suggestions.append("Your **valuation seems high** — lower it closer to ₹1–2 Cr range.")
-            if industry not in ['Technology', 'Health & Wellness', 'E-commerce']:
-                suggestions.append(f"Investors prefer trending sectors. Try linking your business to **{np.random.choice(['Technology', 'Sustainability', 'Digital Services'])}**.")
-            if avg_age < 25 or avg_age > 50:
-                suggestions.append("Highlight **experience or market understanding** in your pitch.")
-            if not suggestions:
-                suggestions.append("Revise your pitch clarity, show strong traction or customer metrics.")
-            st.error("⚠️ The deal is unlikely based on model insights.")
-        else:
-            suggestions.append("Your pitch has strong fundamentals — focus on negotiation strategy for better terms.")
-            suggestions.append("Highlight scalability and market differentiation for top sharks.")
-        for sug in suggestions:
-            st.info(f"💡 {sug}")
+def report_regression(name, y_true, y_pred):
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    return {"model": name, "RMSE": rmse, "MAE": mae, "R2": r2}
 
-        st.balloons()
+# --------------------------
+# TASK 1: Deal (classification)
+# --------------------------
+if target_col in df.columns:
+    print("\n=== TASK 1: Deal Prediction (Classification) ===")
+    y = df[target_col].astype(int)
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y, test_size=0.2, random_state=42, stratify=y)
+
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_test_s = scaler.transform(X_test)
+
+    classifiers = {
+        "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
+        "RandomForest": RandomForestClassifier(n_estimators=200, random_state=42),
+        "GradientBoosting": GradientBoostingClassifier(n_estimators=200, random_state=42),
+        "SVC": SVC(probability=True, random_state=42)
+    }
+    if XGBOOST_AVAILABLE:
+        classifiers["XGBoost"] = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
+
+    task1_results = []
+    for name, clf in classifiers.items():
+        clf.fit(X_train_s, y_train)
+        y_pred = clf.predict(X_test_s)
+        y_prob = clf.predict_proba(X_test_s)[:, 1] if hasattr(clf, "predict_proba") else None
+        res = report_classification(name, y_test, y_pred, y_prob)
+        task1_results.append(res)
+
+        print(f"\n{name} Metrics:")
+        print(f" Accuracy:  {res['accuracy']:.4f}")
+        print(f" Precision: {res['precision']:.4f}")
+        print(f" Recall:    {res['recall']:.4f}")
+        print(f" F1-Score:  {res['f1']:.4f}")
+        print(f" ROC-AUC:   {res['roc_auc']}")
+
+        cm = confusion_matrix(y_test, y_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+        disp.plot(cmap='Blues', values_format='d')
+        plt.title(f"Confusion Matrix — {name}")
+        plt.show()
+
+        joblib.dump((clf, scaler), f"best_{name}_deal.pkl")
+
+    t1_df = pd.DataFrame(task1_results)
+    t1_df['score_for_select'] = t1_df['f1'].fillna(0) + 0.1 * t1_df['roc_auc'].fillna(0)
+    best1 = t1_df.sort_values("score_for_select", ascending=False).iloc[0]
+    print("\nTask 1 Summary:\n", t1_df.sort_values("f1", ascending=False).to_string(index=False))
+    print(f"\n=> Best model for Deal prediction: {best1['model']}")
+else:
+    print("Skipping Task 1 — target column not present.")
+
+# --------------------------
+# TASK 2: Deal Valuation (regression)
+# --------------------------
+if target_valuation in df.columns:
+    print("\n\n=== TASK 2: Deal Valuation (Regression) ===")
+    df_deals = df[df[target_col] == 1] if target_col in df.columns else df.copy()
+    if df_deals.shape[0] < 10:
+        print("Not enough accepted deals to train a valuation model. Skipping.")
+    else:
+        X_reg = df_deals[features]
+        y_reg = df_deals[target_valuation].astype(float)
+
+        X_train, X_test, y_train, y_test = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
+
+        scaler_r = StandardScaler()
+        X_train_r = scaler_r.fit_transform(X_train)
+        X_test_r = scaler_r.transform(X_test)
+
+        regressors = {
+            "BayesianRidge": BayesianRidge(),
+            "Ridge": Ridge(),
+            "Lasso": Lasso(),
+            "ElasticNet": ElasticNet(),
+            "RandomForestRegressor": RandomForestRegressor(n_estimators=200, random_state=42),
+            "GradientBoostingRegressor": GradientBoostingRegressor(n_estimators=200, random_state=42)
+        }
+        if XGBOOST_AVAILABLE:
+            regressors["XGBoostRegressor"] = XGBRegressor(random_state=42)
+
+        task2_results = []
+        for name, reg in regressors.items():
+            reg.fit(X_train_r, y_train)
+            y_pred = reg.predict(X_test_r)
+            res = report_regression(name, y_test, y_pred)
+            task2_results.append(res)
+            print(f"\n{name} -> RMSE:{res['RMSE']:.2f}  MAE:{res['MAE']:.2f}  R2:{res['R2']:.4f}")
+            joblib.dump((reg, scaler_r), f"best_{name}_valuation.pkl")
+
+        t2_df = pd.DataFrame(task2_results)
+        best2 = t2_df.sort_values("R2", ascending=False).iloc[0]
+        print("\nTask 2 Summary:\n", t2_df.sort_values("R2", ascending=False).to_string(index=False))
+        print(f"\n=> Best model for Valuation prediction: {best2['model']} (R2={best2['R2']:.4f})")
+else:
+    print("Skipping Task 2 — valuation column not present.")
+
+# --------------------------
+# TASK 3: Shark prediction (multi-label)
+# --------------------------
+print("\n\n=== TASK 3: Predicting Sharks (Multi-label) ===")
+if 'Accepted Offer' in df.columns:
+    df_shark_deals = df[df['Accepted Offer'] == 1]
+else:
+    df_shark_deals = df.copy()
+
+if df_shark_deals.shape[0] < 10:
+    print("Not enough deals for shark modeling. Skipping.")
+else:
+    X_shark = df_shark_deals[features]
+    y_shark = (df_shark_deals[shark_investors].fillna(0) > 0).astype(int)
+    y_shark.columns = [c.split(' ')[0] for c in shark_investors]
+
+    X_train, X_test, y_train, y_test = train_test_split(X_shark, y_shark, test_size=0.2, random_state=42)
+
+    scaler_s = StandardScaler()
+    X_train_s = scaler_s.fit_transform(X_train)
+    X_test_s = scaler_s.transform(X_test)
+
+    multi_models = {
+        "Logistic_OVR": OneVsRestClassifier(LogisticRegression(max_iter=1000, random_state=42)),
+        "RandomForest_OVR": OneVsRestClassifier(RandomForestClassifier(n_estimators=200, random_state=42)),
+    }
+    if XGBOOST_AVAILABLE:
+        multi_models["XGBoost_OVR"] = OneVsRestClassifier(XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42))
+
+    multi_results = {}
+    for name, clf in multi_models.items():
+        clf.fit(X_train_s, y_train)
+        y_pred = clf.predict(X_test_s)
+
+        per_shark = []
+        print(f"\n{name} - Individual Shark Metrics:")
+        for idx, col in enumerate(y_test.columns):
+            y_true_shark = y_test.iloc[:, idx]
+            y_pred_shark = y_pred[:, idx]
+            acc = accuracy_score(y_true_shark, y_pred_shark)
+            prec = precision_score(y_true_shark, y_pred_shark, zero_division=0)
+            rec = recall_score(y_true_shark, y_pred_shark, zero_division=0)
+            f1 = f1_score(y_true_shark, y_pred_shark, zero_division=0)
+            per_shark.append({"shark": col, "acc": acc, "prec": prec, "rec": rec, "f1": f1})
+            print(f"  {col}: acc={acc:.4f}  prec={prec:.4f}  rec={rec:.4f}  f1={f1:.4f}")
+
+            # Confusion Matrix per shark
+            cm = confusion_matrix(y_true_shark, y_pred_shark)
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+            disp.plot(cmap='Purples', values_format='d')
+            plt.title(f"Confusion Matrix — {name} ({col})")
+            plt.show()
+
+        per_shark_df = pd.DataFrame(per_shark)
+        macro_acc = per_shark_df["acc"].mean()
+        macro_prec = per_shark_df["prec"].mean()
+        macro_rec = per_shark_df["rec"].mean()
+        macro_f1 = per_shark_df["f1"].mean()
+        print(f"\n{name} Macro Averages: acc={macro_acc:.4f}, prec={macro_prec:.4f}, rec={macro_rec:.4f}, f1={macro_f1:.4f}")
+
+        multi_results[name] = {
+            "per_shark": per_shark_df,
+            "macro_acc": macro_acc,
+            "macro_prec": macro_prec,
+            "macro_rec": macro_rec,
+            "macro_f1": macro_f1
+        }
+        joblib.dump((clf, scaler_s), f"best_{name}_sharks.pkl")
+
+    best_multi = sorted(multi_results.items(), key=lambda kv: kv[1]["macro_f1"], reverse=True)[0]
+    print(f"\n=> Best multi-label model for Shark prediction: {best_multi[0]} (macro_f1={best_multi[1]['macro_f1']:.4f})")
+
+print("\n\nAll done. Best models saved as files: best_* .pkl")

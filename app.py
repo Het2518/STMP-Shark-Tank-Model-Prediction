@@ -1,180 +1,188 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import os
-from sklearn.preprocessing import LabelEncoder
-import plotly.graph_objects as go
 
-# =================== MODEL LOADING ===================
+# ==========================
+# PAGE CONFIG
+# ==========================
+st.set_page_config(
+    page_title="🦈 Shark Tank India AI Predictor",
+    page_icon="🦈",
+    layout="wide"
+)
 
-@st.cache_resource
-def load_trained_model(model_keyword):
-    """Load best model matching the keyword."""
-    files = [f for f in os.listdir() if f.startswith("best_") and model_keyword in f and f.endswith(".pkl")]
-    if not files:
-        st.error(f"No model found for {model_keyword}")
-        st.stop()
-    # Prefer XGBoost > GradientBoosting > RandomForest > Logistic > Ridge
-    priority = ["XGBoost", "GradientBoosting", "RandomForest", "Logistic", "Ridge", "BayesianRidge"]
-    files.sort(key=lambda f: next((i for i, p in enumerate(priority) if p in f), 99))
-    model_file = files[0]
-    model, scaler = joblib.load(model_file)
-    st.sidebar.info(f"✅ Loaded model: {model_file}")
-    return model, scaler
+st.title("🦈 Shark Tank India AI Predictor")
+st.caption("Predict Deal Outcomes, Valuation, and Shark Investments — powered by Machine Learning")
 
-deal_model, deal_scaler = load_trained_model("deal")
-valuation_model, val_scaler = load_trained_model("valuation")
-shark_model, shark_scaler = load_trained_model("sharks")
+# ==========================
+# LOAD DATASET
+# ==========================
+DATA_FILE = "sharkTankIndia.xlsx"
 
-# =================== ENCODER PREPARATION ===================
+if not os.path.exists(DATA_FILE):
+    st.error("❌ Dataset file 'sharkTankIndia.xlsx' not found.")
+    st.stop()
 
-@st.cache_data
-def build_label_encoders():
-    df = pd.read_excel("sharkTankIndia.xlsx")
-    encoders = {}
-    for col in ['Industry', 'Pitchers City', 'Pitchers State']:
-        le = LabelEncoder()
-        df[col] = df[col].astype(str)
-        le.fit(df[col])
-        encoders[col] = le
-    return encoders
+df = pd.read_excel(DATA_FILE)
 
-encoders = build_label_encoders()
+# Extract dropdown options dynamically
+industries = sorted(df["Industry"].dropna().unique().tolist()) if "Industry" in df else []
+cities = sorted(df["Pitchers City"].dropna().unique().tolist()) if "Pitchers City" in df else []
+states = sorted(df["Pitchers State"].dropna().unique().tolist()) if "Pitchers State" in df else []
 
-# =================== STREAMLIT SETUP ===================
+# ==========================
+# LOAD TRAINED MODELS
+# ==========================
+def load_model(suffix):
+    for f in os.listdir():
+        if f.endswith(suffix):
+            return joblib.load(f)
+    return None
 
-st.set_page_config(page_title="Shark Tank India Deal Predictor", page_icon="🦈", layout="wide")
+deal_model = load_model("_deal.pkl")
+valuation_model = load_model("_valuation.pkl")
+shark_model = load_model("_sharks.pkl")
 
-st.title("🦈 Shark Tank India — True Model-Based Deal Predictor")
-st.markdown("#### Predictions strictly from your trained ML models (no manual logic)")
+if not deal_model or not valuation_model or not shark_model:
+    st.warning("⚠️ Model files missing. Please train models using run_all_models.py first.")
+    st.stop()
 
-st.divider()
+deal_clf, deal_scaler = deal_model
+reg_model, reg_scaler = valuation_model
+shark_clf, shark_scaler = shark_model
 
-# =================== USER INPUT ===================
+# ==========================
+# INPUT LAYOUT
+# ==========================
+st.markdown("### 🎯 Pitch Details")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    season = st.selectbox("Season", [1, 2, 3], index=2)
-    num_presenters = st.slider("No. of Presenters", 1, 5, 2)
-    male_presenters = st.slider("Male Presenters", 0, num_presenters, 1)
-    female_presenters = num_presenters - male_presenters
-    couple_presenters = st.selectbox("Couple Presenters?", [0, 1], format_func=lambda x: "Yes" if x else "No")
-    avg_age = st.slider("Avg Age", 18, 70, 32)
-
+    num_presenters = st.number_input("👥 No. of Presenters", 1, 10, 2)
+    male_presenters = st.number_input("♂️ Male Presenters", 0, 10, 1)
+    female_presenters = st.number_input("♀️ Female Presenters", 0, 10, 1)
 with col2:
-    ask_amount = st.number_input("Ask Amount (₹)", min_value=100000, max_value=100000000, value=5000000, step=100000)
-    equity = st.slider("Equity Offered (%)", 1.0, 50.0, 10.0, 0.5)
-    valuation = ask_amount / (equity / 100)
-    st.metric("Calculated Valuation", f"₹{valuation:,.0f}")
-
+    couple_presenters = st.number_input("💑 Couple Presenters", 0, 5, 0)
+    pitch_age = st.number_input("🎂 Pitchers Average Age", 18, 60, 30)
+    num_sharks_present = st.slider("🦈 No. of Sharks Present", 1, 8, 5)
 with col3:
-    industry = st.selectbox("Industry", [
-        'Technology', 'Food & Beverage', 'Fashion', 'Health & Wellness',
-        'Education', 'Agriculture', 'E-commerce', 'Services', 'Manufacturing',
-        'Beauty & Personal Care', 'Sports & Fitness', 'Home & Kitchen'
-    ])
-    state = st.selectbox("State", [
-        'Maharashtra', 'Delhi', 'Karnataka', 'Tamil Nadu', 'Gujarat',
-        'Rajasthan', 'Uttar Pradesh', 'West Bengal', 'Telangana', 'Punjab',
-        'Haryana', 'Kerala', 'Madhya Pradesh', 'Andhra Pradesh'
-    ])
-    city = st.selectbox("City", [
-        'Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Hyderabad', 'Ahmedabad',
-        'Kolkata', 'Pune', 'Jaipur', 'Lucknow', 'Surat', 'Indore', 'Chandigarh', 'Kochi'
-    ])
+    pitch_city = st.selectbox("🏙️ Pitchers City", options=cities or ["Unknown"])
+    pitch_state = st.selectbox("🌍 Pitchers State", options=states or ["Unknown"])
+    industry = st.selectbox("🏭 Industry", options=industries or ["Other"])
 
-# =================== INPUT PREP ===================
+st.markdown("---")
 
-input_df = pd.DataFrame([{
-    'Season No': season,
-    'Episode No': 1,
-    'Pitch No': 1,
-    'No of Presenters': num_presenters,
-    'Male Presenters': male_presenters,
-    'Female Presenters': female_presenters,
-    'Couple Presenters': couple_presenters,
-    'Pitchers Average Age': avg_age,
-    'Pitchers City': city,
-    'Pitchers State': state,
-    'Original Ask Amount': ask_amount,
-    'Original Offered Equity': equity,
-    'Valuation Requested': valuation,
-    'Industry': industry,
-    'Num Sharks Present': 8,
-    'Valuation_per_Presenter': valuation / max(num_presenters, 1),
-    'Equity_per_Shark': equity / 8
-}])
+colA, colB, colC = st.columns(3)
+with colA:
+    ask_amount = st.number_input("💸 Ask Amount (₹ Lakh)", 1, 10000, 100)
+with colB:
+    offered_equity = st.number_input("📊 Equity Offered (%)", 1, 100, 10)
+with colC:
+    valuation = (ask_amount / offered_equity) * 100 if offered_equity else 0
+    st.metric("🏢 Implied Company Valuation", f"₹{valuation:,.0f} Lakh")
 
-# Encode categorical features
-for col, le in encoders.items():
-    if col in input_df.columns:
-        val = input_df[col].iloc[0]
-        if val not in le.classes_:
-            input_df[col] = le.transform([le.classes_[0]])
-        else:
-            input_df[col] = le.transform([val])
+# Derived features
+valuation_per_presenter = valuation / num_presenters if num_presenters else 0
+equity_per_shark = offered_equity / num_sharks_present if num_sharks_present else 0
 
-# =================== PREDICTION ===================
+# ==========================
+# BUILD INPUT DATAFRAME
+# ==========================
+features = pd.DataFrame({
+    # Dummy placeholders for training compatibility
+    'Season No': [1],
+    'Episode No': [1],
+    'Pitch No': [1],
+    # Actual pitch features
+    'No of Presenters': [num_presenters],
+    'Male Presenters': [male_presenters],
+    'Female Presenters': [female_presenters],
+    'Couple Presenters': [couple_presenters],
+    'Pitchers Average Age': [pitch_age],
+    'Pitchers City': [pitch_city],
+    'Pitchers State': [pitch_state],
+    'Original Ask Amount': [ask_amount],
+    'Original Offered Equity': [offered_equity],
+    'Valuation Requested': [valuation],
+    'Industry': [industry],
+    'Num Sharks Present': [num_sharks_present],
+    'Valuation_per_Presenter': [valuation_per_presenter],
+    'Equity_per_Shark': [equity_per_shark]
+})
 
-if st.button("🚀 Predict Using True Trained Models"):
-    with st.spinner("Running predictions..."):
+# Encode non-numeric features
+for col in features.select_dtypes(include=['object']).columns:
+    features[col] = pd.factorize(features[col])[0]
 
-        # --- Deal Acceptance ---
-        X_scaled = deal_scaler.transform(input_df)
-        deal_prob = deal_model.predict_proba(X_scaled)[0][1] * 100
-        deal_pred = int(deal_prob >= 60)  # threshold = 60% confidence
+# Auto-align features with scaler expectations (future-proof)
+if hasattr(deal_scaler, "feature_names_in_"):
+    expected_cols = list(deal_scaler.feature_names_in_)
+    missing_cols = [c for c in expected_cols if c not in features.columns]
+    for mc in missing_cols:
+        features[mc] = 0
+    features = features[expected_cols]
 
-        # --- Valuation ---
-        Xv_scaled = val_scaler.transform(input_df)
-        predicted_val = valuation_model.predict(Xv_scaled)[0]
+# ==========================
+# TABS FOR PREDICTION
+# ==========================
+tab1, tab2, tab3 = st.tabs(["📊 Deal Prediction", "💰 Valuation Prediction", "🦈 Shark Investment"])
 
-        # --- Sharks ---
-        Xs_scaled = shark_scaler.transform(input_df)
-        y_pred = shark_model.predict(Xs_scaled)[0]
-        shark_labels = ['Namita', 'Vineeta', 'Anupam', 'Aman', 'Peyush', 'Ritesh', 'Amit', 'Guest']
-        predicted_sharks = [shark_labels[i] for i, v in enumerate(y_pred) if v == 1]
+# --- TAB 1: DEAL ACCEPTANCE ---
+with tab1:
+    st.subheader("📊 Deal Acceptance Prediction")
+    X_scaled = deal_scaler.transform(features)
+    y_pred = deal_clf.predict(X_scaled)[0]
 
-        # =================== OUTPUT ===================
-        st.subheader("🎯 Model Predictions")
+    prob = None
+    if hasattr(deal_clf, "predict_proba"):
+        prob = deal_clf.predict_proba(X_scaled)[0][1]
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Deal Outcome", "✅ Accepted" if deal_pred else "❌ Unlikely", f"{deal_prob:.1f}%")
-        with col2:
-            st.metric("Predicted Valuation", f"₹{predicted_val:,.0f}")
-        with col3:
-            st.metric("Model Confidence", f"{deal_prob:.1f}%")
+    if y_pred == 1:
+        st.success("🎉 The deal is **likely to be accepted!**")
+    else:
+        st.error("❌ The deal is **unlikely to be accepted.**")
 
-        # Confidence Gauge
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=deal_prob,
-            title={"text": "Model Confidence (%)"},
-            gauge={
-                'axis': {'range': [0, 100]},
-                'bar': {'color': "#38ef7d" if deal_prob > 60 else "#f5576c"}
-            }
-        ))
-        st.plotly_chart(fig, use_container_width=True)
+    if prob is not None:
+        st.progress(int(prob * 100))
+        st.markdown(f"**Confidence:** `{prob*100:.2f}%`")
 
-        # Sharks
-        st.markdown("### 🦈 Sharks Likely to Invest")
-        if predicted_sharks:
-            for s in predicted_sharks:
-                st.success(f"• {s}")
-        else:
-            st.warning("No shark match predicted for this pitch.")
+# --- TAB 2: VALUATION PREDICTION ---
+with tab2:
+    st.subheader("💰 Predicted Negotiated Valuation")
 
-        # Data insight section
-        st.markdown("### 📊 Insights from Model")
-        if deal_prob >= 80:
-            st.success("Excellent! Model indicates strong acceptance likelihood.")
-        elif deal_prob >= 60:
-            st.info("Good probability — competitive offer.")
-        elif deal_prob >= 40:
-            st.warning("Moderate probability — tweak equity or valuation.")
-        else:
-            st.error("Low deal chance — try reducing valuation or equity percentage.")
+    Xv_scaled = reg_scaler.transform(features)
+    valuation_pred = reg_model.predict(Xv_scaled)[0]
 
-        st.balloons()
+    st.metric("Predicted Final Valuation", f"₹{valuation_pred:,.0f} Lakh")
+    diff = valuation_pred - valuation
+    if diff > 0:
+        st.info(f"💹 Model suggests a **higher valuation** (+₹{diff:,.0f} Lakh)")
+    else:
+        st.warning(f"📉 Model suggests a **lower valuation** (−₹{abs(diff):,.0f} Lakh)")
+
+# --- TAB 3: SHARK INVESTMENT ---
+with tab3:
+    st.subheader("🦈 Predict Which Sharks May Invest")
+
+    Xs_scaled = shark_scaler.transform(features)
+    pred = shark_clf.predict(Xs_scaled)[0]
+
+    sharks = ['Namita', 'Vineeta', 'Anupam', 'Aman', 'Peyush', 'Ritesh', 'Amit', 'Guest']
+    df_pred = pd.DataFrame({
+        'Shark': sharks,
+        'Prediction': ['✅ Invests' if p == 1 else '❌ Skips' for p in pred]
+    })
+
+    invested = df_pred[df_pred['Prediction'] == '✅ Invests']
+    if not invested.empty:
+        st.success(f"Likely Investors: {', '.join(invested['Shark'].tolist())}")
+    else:
+        st.warning("No sharks are expected to invest in this pitch.")
+
+    st.dataframe(df_pred, use_container_width=True)
+
+st.markdown("---")
+st.caption("Made with ❤️ by Het • Shark Tank India Predictor • Streamlit + ML")
