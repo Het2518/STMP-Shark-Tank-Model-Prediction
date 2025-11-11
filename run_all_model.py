@@ -289,3 +289,7 @@ else:
     print(f"\n=> Best multi-label model for Shark prediction: {best_multi[0]} (macro_f1={best_multi[1]['macro_f1']:.4f})")
 
 print("\n\nAll done. Best models saved as files: best_* .pkl")
+# Save label encoders for categorical columns
+joblib.dump(label_encoders, "label_encoders.pkl")
+print("\n✅ Saved label encoders as 'label_encoders.pkl'")
+
