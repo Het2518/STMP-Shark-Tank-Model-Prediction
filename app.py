@@ -133,6 +133,12 @@ tab1, tab2, tab3 = st.tabs(["📊 Deal Prediction", "💰 Valuation Prediction",
 # --- TAB 1: DEAL ACCEPTANCE ---
 with tab1:
     st.subheader("📊 Deal Acceptance Prediction")
+
+    st.markdown("""
+    💡 **Hint:** This prediction estimates whether your pitch is likely to get a deal offer.
+    Factors like number of presenters, ask amount, equity, and industry play a big role.
+    """)
+
     X_scaled = deal_scaler.transform(features)
     y_pred = deal_clf.predict(X_scaled)[0]
 
@@ -142,8 +148,10 @@ with tab1:
 
     if y_pred == 1:
         st.success("🎉 The deal is **likely to be accepted!**")
+        st.markdown("🟢 *Your pitch looks strong — investors may show interest!*")
     else:
         st.error("❌ The deal is **unlikely to be accepted.**")
+        st.markdown("🔴 *Consider revising your equity or ask to improve appeal.*")
 
     if prob is not None:
         st.progress(int(prob * 100))
@@ -153,19 +161,55 @@ with tab1:
 with tab2:
     st.subheader("💰 Predicted Negotiated Valuation")
 
+    st.markdown("""
+    💡 **Hint:** This shows the expected final negotiated company valuation based on your inputs.
+    Compare it with your **Implied Valuation** above to gauge how much investors might agree on.
+    """)
+
     Xv_scaled = reg_scaler.transform(features)
     valuation_pred = reg_model.predict(Xv_scaled)[0]
 
-    st.metric("Predicted Final Valuation", f"₹{valuation_pred:,.0f} Lakh")
+    # Convert Lakh → Crore for better readability
+    valuation_pred_cr = valuation_pred / 100
+    valuation_cr = valuation / 100
+
+    st.metric("Predicted Final Valuation", f"₹{valuation_pred:,.0f} Lakh (≈ ₹{valuation_pred_cr:,.2f} Cr)")
+
     diff = valuation_pred - valuation
+
+    # 💡 Negotiation Range Logic
+    if valuation_pred > 0:
+        lower_range = valuation_pred * 1.4
+        upper_range = valuation_pred * 1.8
+        st.markdown(
+            f"💬 *Negotiation Tip:* To land around ₹{valuation_pred:,.0f} Lakh "
+            f"(≈ ₹{valuation_pred_cr:,.2f} Cr), consider asking between "
+            f"**₹{lower_range:,.0f} – ₹{upper_range:,.0f} Lakh** "
+            f"(≈ ₹{lower_range/100:,.2f} – ₹{upper_range/100:,.2f} Cr).*"
+        )
+
+    # Display difference feedback
     if diff > 0:
         st.info(f"💹 Model suggests a **higher valuation** (+₹{diff:,.0f} Lakh)")
-    else:
+    elif diff < 0:
         st.warning(f"📉 Model suggests a **lower valuation** (−₹{abs(diff):,.0f} Lakh)")
+    else:
+        st.success("✅ Your ask perfectly matches the predicted valuation!")
+
+    # Visual comparison bar
+    st.markdown("#### Deal Alignment")
+    pct_alignment = min(100, max(0, (valuation / valuation_pred) * 100)) if valuation_pred > 0 else 0
+    st.progress(int(pct_alignment))
+    st.caption(f"Your current ask is about {pct_alignment:.1f}% of the model’s predicted valuation.")
 
 # --- TAB 3: SHARK INVESTMENT ---
 with tab3:
     st.subheader("🦈 Predict Which Sharks May Invest")
+
+    st.markdown("""
+    💡 **Hint:** This prediction identifies which sharks are most likely to invest based on your pitch details.
+    Investors are predicted using multi-label classification across past seasons.
+    """)
 
     Xs_scaled = shark_scaler.transform(features)
     pred = shark_clf.predict(Xs_scaled)[0]
@@ -179,10 +223,13 @@ with tab3:
     invested = df_pred[df_pred['Prediction'] == '✅ Invests']
     if not invested.empty:
         st.success(f"Likely Investors: {', '.join(invested['Shark'].tolist())}")
+        st.markdown("🟢 *Your pitch aligns well with these sharks’ past investment patterns.*")
     else:
         st.warning("No sharks are expected to invest in this pitch.")
+        st.markdown("🔴 *Try adjusting equity or target industry to attract more investors.*")
 
     st.dataframe(df_pred, use_container_width=True)
 
+
 st.markdown("---")
-st.caption("Made with ❤️ by Het • Shark Tank India Predictor • Streamlit + ML")
+st.caption("Made with ❤️ by STMP Developers • Shark Tank India Predictor • Streamlit + ML")
