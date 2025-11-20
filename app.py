@@ -133,25 +133,6 @@ shark_expertise = {
 }
 
 # ============================================================
-#  SUCCESS HINTS SIDEBAR
-# ============================================================
-st.sidebar.header("💡 Tips for Success")
-st.sidebar.info("""
-**To Maximize Deal Likelihood:**
-• **Optimal Team:** 2-3 presenters (balanced & focused)
-• **Ask Amount:** ₹25-75 Lakhs (sweet spot)
-• **Equity Offer:** 10-20% (attractive but not excessive)
-• **Valuation:** Realistic based on industry benchmarks
-• **Gender Mix:** Balanced representation
-• **Sharks Present:** 4-6 (competitive but manageable)
-
-**Negotiation Tips:**
-• Always have a bottom-line valuation
-• Be ready to justify your ask with data
-• Show market traction & customer validation
-""")
-
-# ============================================================
 #  INPUT SECTION
 # ============================================================
 st.markdown("---")
