@@ -1,26 +1,55 @@
-# app.py
+# app.py — Full Featured Shark Tank India AI Predictor
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import os
+from sklearn.preprocessing import LabelEncoder
+from sklearn.base import BaseEstimator, ClassifierMixin
 
-# ==========================
-# PAGE CONFIG
-# ==========================
+# ============================================================
+#  XGBWrapper for compatibility
+# ============================================================
+try:
+    from xgboost import XGBClassifier
+    
+    class XGBWrapper(BaseEstimator, ClassifierMixin):
+        def __init__(self):
+            self.model = XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+
+        def fit(self, X, y):
+            self.model.fit(X, y)
+            return self
+
+        def predict(self, X):
+            return self.model.predict(X)
+
+        def predict_proba(self, X):
+            try:
+                return self.model.predict_proba(X)
+            except:
+                return np.zeros((len(X), 2))
+except:
+    pass
+
+
+# ============================================================
+#  PAGE CONFIG
+# ============================================================
 st.set_page_config(
-    page_title="🦈 Shark Tank India AI Predictor",
+    page_title="Shark Tank India AI Predictor",
     page_icon="🦈",
     layout="wide"
 )
 
-st.title("🦈 Shark Tank India AI Predictor")
-st.caption("Predict Deal Outcomes, Negotiation Valuation, and Shark Investments — powered by Machine Learning")
+st.title("🦈 Shark Tank India — AI Deal Predictor")
+st.caption("Predict Deal Outcomes • Negotiate Valuations • Identify Interested Sharks — Powered by Machine Learning")
 
-# ==========================
-# LOAD DATASET
-# ==========================
 DATA_FILE = "sharkTankIndia.xlsx"
+
+# ============================================================
+#  LOAD DATASET
+# ============================================================
 if not os.path.exists(DATA_FILE):
     if os.path.exists("/mnt/data/sharkTankIndia.csv"):
         DATA_FILE = "/mnt/data/sharkTankIndia.csv"
@@ -34,6 +63,11 @@ else:
             df = pd.read_csv(DATA_FILE)
         else:
             df = pd.read_excel(DATA_FILE)
+        
+        # Fix column names
+        if "Pitchers Average Age " in df.columns:
+            df.rename(columns={"Pitchers Average Age ": "Pitchers Average Age"}, inplace=True)
+            
     except Exception as e:
         st.error(f"Error loading dataset: {e}")
         df = pd.DataFrame()
@@ -43,52 +77,85 @@ industries = sorted(df["Industry"].dropna().unique().tolist()) if "Industry" in 
 cities = sorted(df["Pitchers City"].dropna().unique().tolist()) if "Pitchers City" in df.columns else ["Unknown"]
 states = sorted(df["Pitchers State"].dropna().unique().tolist()) if "Pitchers State" in df.columns else ["Unknown"]
 
-# ==========================
-# LOAD MODELS
-# ==========================
+# ============================================================
+#  LOAD TRAINED MODELS
+# ============================================================
 @st.cache_resource
 def load_models():
     models = {}
-    required_files = {
-        "deal_model.pkl": None,
-        "valuation_model.pkl": None,
-        "shark_model.pkl": None,
-        "label_encoders.pkl": {},
-        "industry_stats.pkl": None,
-        "feature_columns.pkl": []
-    }
     
-    for fname in required_files.keys():
-        if os.path.exists(fname):
-            models[fname] = joblib.load(fname)
-        else:
-            models[fname] = required_files[fname]
+    # Auto-detect models from directory
+    for fname in os.listdir("."):
+        if fname.endswith("_deal.pkl"):
+            try:
+                models["deal_model"] = joblib.load(fname)
+            except:
+                pass
+        elif fname.endswith("_valuation.pkl"):
+            try:
+                models["valuation_model"] = joblib.load(fname)
+            except:
+                pass
+        elif fname.endswith("_sharks.pkl"):
+            try:
+                models["shark_model"] = joblib.load(fname)
+            except:
+                pass
     
     return models
 
 models = load_models()
 
-# Validate required models
-if models["deal_model.pkl"] is None or models["valuation_model.pkl"] is None or models["shark_model.pkl"] is None:
-    st.error("❌ Model files missing! Please run `run_all_models.py` first to train and save models.")
-    st.info("Required files: deal_model.pkl, valuation_model.pkl, shark_model.pkl")
+# Validate models
+if "deal_model" not in models or "valuation_model" not in models or "shark_model" not in models:
+    st.error("❌ Model files missing! Please run train_all_models.py first.")
+    st.info("Required: *_deal.pkl, *_valuation.pkl, *_sharks.pkl")
     st.stop()
 
-# Extract models
-deal_clf, deal_scaler = models["deal_model.pkl"]
-valuation_model_obj = models["valuation_model.pkl"]
-shark_clf, shark_scaler = models["shark_model.pkl"]
-label_encoders = models["label_encoders.pkl"]
-industry_stats_df = models["industry_stats.pkl"]
-feature_columns = models["feature_columns.pkl"]
+deal_clf, deal_scaler = models["deal_model"]
+valuation_clf, valuation_scaler = models["valuation_model"]
+shark_clf, shark_scaler = models["shark_model"]
 
 sharks = ['Namita', 'Vineeta', 'Anupam', 'Aman', 'Peyush', 'Ritesh', 'Amit', 'Guest']
 
-# ==========================
-# INPUT SECTION
-# ==========================
+# ============================================================
+#  SHARK EXPERTISE MAPPING
+# ============================================================
+shark_expertise = {
+    'Namita': {'domain': 'Healthcare & Pharma', 'style': 'Data-driven, focuses on margins & profitability'},
+    'Vineeta': {'domain': 'Fashion & Lifestyle', 'style': 'Brand-focused, D2C & marketing expertise'},
+    'Anupam': {'domain': 'Entertainment & Services', 'style': 'Strategic networks, mentorship approach'},
+    'Aman': {'domain': 'E-commerce & Tech', 'style': 'Aggressive growth, platform scalability'},
+    'Peyush': {'domain': 'Technology & SaaS', 'style': 'Product-focused, technical deep-dive'},
+    'Ritesh': {'domain': 'Food & Hospitality', 'style': 'Customer experience, brand building'},
+    'Amit': {'domain': 'Fashion & Retail', 'style': 'Supply chain, manufacturing networks'},
+    'Guest': {'domain': 'Various', 'style': 'Depends on guest shark'}
+}
+
+# ============================================================
+#  SUCCESS HINTS SIDEBAR
+# ============================================================
+st.sidebar.header("💡 Tips for Success")
+st.sidebar.info("""
+**To Maximize Deal Likelihood:**
+• **Optimal Team:** 2-3 presenters (balanced & focused)
+• **Ask Amount:** ₹25-75 Lakhs (sweet spot)
+• **Equity Offer:** 10-20% (attractive but not excessive)
+• **Valuation:** Realistic based on industry benchmarks
+• **Gender Mix:** Balanced representation
+• **Sharks Present:** 4-6 (competitive but manageable)
+
+**Negotiation Tips:**
+• Always have a bottom-line valuation
+• Be ready to justify your ask with data
+• Show market traction & customer validation
+""")
+
+# ============================================================
+#  INPUT SECTION
+# ============================================================
 st.markdown("---")
-st.markdown("### 🎯 Enter Pitch Details")
+st.markdown("### 🎯 Enter Your Pitch Details")
 
 col1, col2, col3 = st.columns(3)
 
@@ -109,7 +176,7 @@ with col2:
 with col3:
     st.markdown("**🦈 Show Details**")
     num_sharks_present = st.slider("No. of Sharks Present", min_value=1, max_value=8, value=5)
-    st.info(f"💡 **Tip:** More sharks = more competition for your deal!")
+    st.info(f"💡 **Tip:** {num_sharks_present} sharks = {'High' if num_sharks_present >= 5 else 'Moderate' if num_sharks_present >= 3 else 'Low'} competition")
 
 st.markdown("---")
 st.markdown("### 💰 Financial Details")
@@ -122,7 +189,7 @@ with colA:
         min_value=1.0, 
         max_value=100000.0, 
         value=100.0,
-        help="How much money are you asking for?"
+        help="How much funding are you seeking?"
     )
 
 with colB:
@@ -131,31 +198,36 @@ with colB:
         min_value=0.1, 
         max_value=100.0, 
         value=10.0,
-        help="What percentage of your company are you offering?"
+        help="What % of your company are you offering?"
     )
 
 with colC:
-    valuation = (ask_amount / offered_equity) * 100 if offered_equity else 0
-    valuation_cr = valuation / 100
+    if offered_equity > 0:
+        valuation = (ask_amount / offered_equity) * 100
+        valuation_cr = valuation / 100
+    else:
+        valuation = 0
+        valuation_cr = 0
+    
     st.metric(
-        "🏢 Implied Company Valuation", 
+        "🏢 Implied Valuation", 
         f"₹{valuation:,.0f} Lakh",
         f"≈ ₹{valuation_cr:.2f} Cr"
     )
     
     # Reality check
     if valuation_cr > 100:
-        st.warning("⚠️ Very high valuation! Sharks might be skeptical.")
+        st.warning("⚠️ Very high valuation - Sharks may be skeptical")
     elif valuation_cr < 1:
-        st.warning("⚠️ Very low valuation. Consider asking for more equity or higher amount.")
+        st.warning("⚠️ Very low valuation - Consider higher ask or lower equity")
 
 # Derived features
 valuation_per_presenter = valuation / num_presenters if num_presenters else 0
 equity_per_shark = offered_equity / num_sharks_present if num_sharks_present else 0
 
-# ==========================
-# BUILD FEATURE DATAFRAME
-# ==========================
+# ============================================================
+#  BUILD FEATURE VECTOR
+# ============================================================
 feat_dict = {
     'Season No': 1,
     'Episode No': 1,
@@ -179,146 +251,130 @@ feat_dict = {
 features = pd.DataFrame([feat_dict])
 
 # Encode categorical features
-for col, le in label_encoders.items():
+cat_cols = ["Pitchers City", "Pitchers State", "Industry"]
+for col in cat_cols:
     if col in features.columns:
+        le = LabelEncoder()
+        le.fit(df[col].astype(str))
         val = str(features.loc[0, col])
-        if val in le.classes_:
+        try:
             features.loc[0, col] = int(le.transform([val])[0])
-        else:
+        except:
             features.loc[0, col] = -1
 
-# Align with training columns
-expected_cols = feature_columns
-for c in expected_cols:
+# Reorder columns
+train_cols = [
+    "Season No", "Episode No", "Pitch No",
+    "No of Presenters", "Male Presenters", "Female Presenters", "Couple Presenters",
+    "Pitchers Average Age", "Pitchers City", "Pitchers State",
+    "Original Ask Amount", "Original Offered Equity", "Valuation Requested", "Industry",
+    "Num Sharks Present", "Valuation_per_Presenter", "Equity_per_Shark"
+]
+
+for c in train_cols:
     if c not in features.columns:
         features[c] = 0
-features = features[expected_cols]
+features = features[train_cols]
 
-# ==========================
-# MAKE PREDICTIONS
-# ==========================
+# ============================================================
+#  MAKE PREDICTIONS
+# ============================================================
 # Deal prediction
-X_scaled = deal_scaler.transform(features)
-deal_pred = int(deal_clf.predict(X_scaled)[0])
+X_deal = deal_scaler.transform(features)
+deal_pred = int(deal_clf.predict(X_deal)[0])
+
 deal_prob = None
 try:
-    deal_prob = float(deal_clf.predict_proba(X_scaled)[0][1]) if hasattr(deal_clf, "predict_proba") else None
+    if hasattr(deal_clf, "predict_proba"):
+        deal_prob = float(deal_clf.predict_proba(X_deal)[0][1])
 except:
-    deal_prob = None
+    pass
 
 # Valuation prediction
-if isinstance(valuation_model_obj, tuple):
-    reg_model, reg_scaler = valuation_model_obj
-    Xv_scaled = reg_scaler.transform(features)
-    valuation_pred = float(reg_model.predict(Xv_scaled)[0])
-else:
-    valuation_pred = float(valuation_model_obj[1]) if valuation_model_obj[0] == "mean" else 0
-
+X_val = valuation_scaler.transform(features)
+try:
+    valuation_pred = float(valuation_clf.predict(X_val)[0])
+except:
+    valuation_pred = valuation
 valuation_pred_cr = valuation_pred / 100
 
 # Shark prediction
-Xs_scaled = shark_scaler.transform(features)
+X_shark = shark_scaler.transform(features)
 try:
-    shark_pred = shark_clf.predict(Xs_scaled)[0]
-    shark_probs_model = shark_clf.predict_proba(Xs_scaled)[0] if hasattr(shark_clf, "predict_proba") else np.zeros(len(sharks))
+    shark_pred = shark_clf.predict(X_shark)[0]
 except:
     shark_pred = np.zeros(len(sharks), dtype=int)
-    shark_probs_model = np.zeros(len(sharks))
 
-# ==========================
-# LOGICAL SHARK PREDICTION FIX
-# ==========================
+try:
+    if hasattr(shark_clf, "predict_proba"):
+        shark_probs = shark_clf.predict_proba(X_shark)[0]
+    else:
+        shark_probs = np.zeros(len(sharks))
+except:
+    shark_probs = np.zeros(len(sharks))
+
+# Logical consistency: no deal = no sharks
 if deal_pred == 0:
-    # NO DEAL → NO SHARKS
     final_shark_pred = np.zeros(len(sharks), dtype=int)
 else:
-    # DEAL → Use model + fallback logic
-    final_shark_pred = shark_pred.astype(int).copy()
-    
-    # If model predicted no sharks despite deal (edge case)
-    if final_shark_pred.sum() == 0:
-        ind_val = features['Industry'].iloc[0]
-        if ind_val in industry_stats_df.index:
-            industry_probs = industry_stats_df.loc[ind_val].reindex(sharks).fillna(0).values
-        else:
-            industry_probs = industry_stats_df.mean(axis=0).reindex(sharks).fillna(0).values
-        
-        # Combine model + historical
-        combined = 0.6 * np.array(shark_probs_model) + 0.4 * np.array(industry_probs)
-        
-        # Pick top K sharks
-        k = min(int(num_sharks_present), max(1, int(np.ceil(num_sharks_present / 2))))
-        top_idx = np.argsort(combined)[::-1][:k]
-        final_shark_pred = np.zeros(len(sharks), dtype=int)
-        final_shark_pred[top_idx] = 1
-    
-    # Trim if too many sharks predicted
-    elif final_shark_pred.sum() > num_sharks_present:
-        idxs = np.where(final_shark_pred == 1)[0]
-        probs_selected = np.array(shark_probs_model)[idxs]
-        keep = idxs[np.argsort(probs_selected)[::-1][:num_sharks_present]]
-        new_pred = np.zeros(len(sharks), dtype=int)
-        new_pred[keep] = 1
-        final_shark_pred = new_pred
+    final_shark_pred = shark_pred.astype(int)
 
-# ==========================
-# OVERVIEW SECTION
-# ==========================
+# ============================================================
+#  RESULTS SECTION
+# ============================================================
 st.markdown("---")
-st.markdown("## 📋 Prediction Summary")
+st.markdown("## 📊 Prediction Results")
 
+# Overview Cards
 overview_col1, overview_col2, overview_col3 = st.columns(3)
 
 with overview_col1:
     if deal_pred == 1:
-        st.success("✅ **DEAL LIKELY**")
+        st.success("✅ DEAL LIKELY")
         if deal_prob:
             st.metric("Confidence", f"{deal_prob*100:.1f}%")
-        st.markdown("🎉 Your pitch has strong potential!")
+            st.progress(deal_prob)
     else:
-        st.error("❌ **NO DEAL LIKELY**")
+        st.error("❌ DEAL UNLIKELY")
         if deal_prob:
-            st.metric("Rejection Confidence", f"{(1-deal_prob)*100:.1f}%")
-        st.markdown("💡 Consider adjusting your ask/equity")
+            st.metric("Rejection Risk", f"{(1-deal_prob)*100:.1f}%")
+            st.progress(1-deal_prob)
 
 with overview_col2:
     if deal_pred == 1:
-        st.info("💰 **Expected Final Deal**")
-        st.metric("Valuation", f"₹{valuation_pred_cr:.2f} Cr")
-        diff_pct = ((valuation_pred - valuation) / valuation * 100) if valuation > 0 else 0
-        if abs(diff_pct) > 20:
-            st.caption(f"{'📈' if diff_pct > 0 else '📉'} {abs(diff_pct):.1f}% from your ask")
+        st.info("💰 Predicted Valuation")
+        st.metric("Final Value", f"₹{valuation_pred_cr:.2f} Cr", 
+                 f"vs ₹{valuation_cr:.2f} Cr asked")
     else:
-        st.warning("💰 **No Valuation**")
-        st.caption("Deal unlikely to proceed")
+        st.warning("💰 Valuation")
+        st.metric("Value", "N/A (No deal predicted)")
 
 with overview_col3:
-    if deal_pred == 1:
-        likely_investors = [sharks[i] for i, pred in enumerate(final_shark_pred) if pred == 1]
-        if likely_investors:
-            st.success(f"🦈 **{len(likely_investors)} Shark(s)**")
-            st.caption(", ".join(likely_investors))
-        else:
-            st.warning("🦈 **Uncertain**")
-            st.caption("Deal possible but unclear who")
+    interested_count = sum(final_shark_pred)
+    if deal_pred == 1 and interested_count > 0:
+        st.success(f"🦈 {interested_count} Shark(s) Interested")
+        st.metric("Investors", f"{interested_count}/{num_sharks_present}")
+    elif deal_pred == 1:
+        st.warning("🦈 Shark Interest")
+        st.metric("Status", "Uncertain")
     else:
-        st.error("🦈 **No Investors**")
-        st.caption("No deal = no investment")
+        st.error("🦈 No Investors")
+        st.metric("Status", "No deal")
 
-# ==========================
-# DETAILED TABS
-# ==========================
+# ============================================================
+#  DETAILED ANALYSIS TABS
+# ============================================================
 st.markdown("---")
-st.markdown("## 📊 Detailed Analysis")
+st.markdown("## 📈 Detailed Analysis")
 
 tab1, tab2, tab3 = st.tabs(["📊 Deal Analysis", "💰 Valuation Breakdown", "🦈 Shark Predictions"])
 
-# --- TAB 1: DEAL ---
+# --- TAB 1: DEAL ANALYSIS ---
 with tab1:
     st.subheader("📊 Deal Acceptance Prediction")
     
     if deal_pred == 1:
-        st.success("🎉 **Your pitch is likely to get a deal!**")
+        st.success("🎉 **Your pitch is likely to get a DEAL!**")
         
         if deal_prob is not None:
             st.progress(int(deal_prob * 100))
@@ -327,17 +383,21 @@ with tab1:
             if deal_prob > 0.8:
                 st.markdown("**💪 Excellent Pitch!** Very high success probability.")
             elif deal_prob > 0.6:
-                st.markdown("**👍 Good Pitch!** Solid chances with minor improvements possible.")
+                st.markdown("**👍 Good Pitch!** Solid chances with potential for improvement.")
             else:
-                st.markdown("**⚠️ Moderate Pitch** - Consider optimizing your ask/equity ratio.")
+                st.markdown("**⚠️ Moderate Pitch** - Some refinements could strengthen your proposal.")
         
         st.markdown("### ✅ What's Working:")
-        st.markdown(f"- Your valuation of ₹{valuation_cr:.2f} Cr seems reasonable")
-        st.markdown(f"- {offered_equity:.1f}% equity offering is in acceptable range")
-        st.markdown(f"- {num_sharks_present} sharks present increases competition")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(f"✓ Valuation: ₹{valuation_cr:.2f} Cr")
+            st.markdown(f"✓ Equity Offer: {offered_equity:.1f}%")
+        with col_b:
+            st.markdown(f"✓ Ask Amount: ₹{ask_amount:.0f} Lakh")
+            st.markdown(f"✓ Team Size: {num_presenters} presenters")
         
     else:
-        st.error("❌ **Your pitch is unlikely to get a deal.**")
+        st.error("❌ **Your pitch is predicted to be REJECTED**")
         
         if deal_prob is not None:
             rejection_conf = (1 - deal_prob) * 100
@@ -346,32 +406,35 @@ with tab1:
         
         st.markdown("### 💡 Suggestions to Improve:")
         
-        # Calculate better values
-        better_equity = offered_equity * 1.3
-        better_ask = ask_amount * 0.8
-        better_valuation = valuation * 0.7
+        # Calculate suggested improvements
+        better_equity = offered_equity * 1.5
+        better_ask = ask_amount * 0.7
+        better_valuation = valuation * 0.65
         
         col_sug1, col_sug2 = st.columns(2)
         
         with col_sug1:
-            st.markdown("**🎯 Option 1: Increase Equity**")
-            st.markdown(f"- Offer **{better_equity:.1f}%** instead of {offered_equity:.1f}%")
-            st.markdown(f"- Keep ask at ₹{ask_amount:.0f} Lakh")
-            st.markdown(f"- New valuation: ₹{(ask_amount/better_equity*100/100):.2f} Cr")
+            st.markdown("**📈 Option 1: Increase Equity Offer**")
+            st.markdown(f"• Offer **{better_equity:.1f}%** (vs {offered_equity:.1f}%)")
+            st.markdown(f"• Keep ask at ₹{ask_amount:.0f} Lakh")
+            new_val_1 = (ask_amount / better_equity) * 100 / 100
+            st.markdown(f"• New valuation: **₹{new_val_1:.2f} Cr**")
         
         with col_sug2:
-            st.markdown("**💸 Option 2: Reduce Ask**")
-            st.markdown(f"- Ask for **₹{better_ask:.0f} Lakh** instead")
-            st.markdown(f"- Keep equity at {offered_equity:.1f}%")
-            st.markdown(f"- New valuation: ₹{(better_ask/offered_equity*100/100):.2f} Cr")
+            st.markdown("**📉 Option 2: Reduce Ask Amount**")
+            st.markdown(f"• Ask for **₹{better_ask:.0f} Lakh** (vs ₹{ask_amount:.0f}L)")
+            st.markdown(f"• Keep equity at {offered_equity:.1f}%")
+            new_val_2 = (better_ask / offered_equity) * 100 / 100
+            st.markdown(f"• New valuation: **₹{new_val_2:.2f} Cr**")
         
-        st.markdown("**🎯 Option 3: Combined Approach**")
-        st.markdown(f"- Target valuation: **₹{better_valuation/100:.2f} Cr**")
-        st.markdown(f"- Suggested ask: ₹{better_valuation * offered_equity / 100:.0f} Lakh for {offered_equity:.1f}% equity")
+        st.markdown("**🎯 Option 3: Balanced Approach**")
+        st.markdown(f"• Target valuation: **₹{better_valuation/100:.2f} Cr**")
+        suggested_ask = (better_valuation * better_equity / 100)
+        st.markdown(f"• Ask: ₹{suggested_ask:.0f} Lakh for {better_equity:.1f}% equity")
 
 # --- TAB 2: VALUATION ---
 with tab2:
-    st.subheader("💰 Valuation Analysis")
+    st.subheader("💰 Valuation Analysis & Negotiation Strategy")
     
     if deal_pred == 1:
         st.markdown("📈 **Based on similar successful pitches:**")
@@ -386,196 +449,163 @@ with tab2:
             st.metric("Predicted Final", f"₹{valuation_pred_cr:.2f} Cr", f"{diff:+,.0f} Lakh")
         
         with col_v3:
-            negotiation_factor = valuation_pred / valuation if valuation > 0 else 1
-            st.metric("Negotiation Factor", f"{negotiation_factor:.2f}x")
+            neg_factor = valuation_pred / valuation if valuation > 0 else 1
+            st.metric("Negotiation Factor", f"{neg_factor:.2f}x")
         
         st.markdown("---")
-        st.markdown("### 📊 Negotiation Insights")
+        st.markdown("### 🎯 Negotiation Insights")
         
-        if negotiation_factor > 1.2:
-            st.success("🎯 **You're undervaluing your company!**")
-            st.markdown(f"💡 Sharks might offer **MORE** than you're asking. Consider:")
-            st.markdown(f"- Initial ask: **₹{valuation_pred * 1.2:,.0f} Lakh** (₹{valuation_pred_cr * 1.2:.2f} Cr)")
-            st.markdown(f"- Leave room to negotiate down to ₹{valuation_pred_cr:.2f} Cr")
+        if neg_factor > 1.2:
+            st.success("🎯 **You're UNDERVALUING your company!**")
+            st.markdown(f"💡 **Recommendation:**")
+            st.markdown(f"• Initial ask: **₹{valuation_pred * 1.2 / 100:.2f} Cr** (be ambitious)")
+            st.markdown(f"• Target: **₹{valuation_pred_cr:.2f} Cr** (expected settlement)")
+            st.markdown(f"• Floor: **₹{valuation_pred * 0.85 / 100:.2f} Cr** (don't go below)")
             
-        elif negotiation_factor < 0.8:
-            st.warning("📉 **Your valuation seems high**")
-            st.markdown(f"💡 Expect sharks to negotiate **DOWN** significantly:")
-            st.markdown(f"- They'll likely counter at **₹{valuation_pred_cr:.2f} Cr**")
-            st.markdown(f"- That's {abs((1-negotiation_factor)*100):.1f}% below your ask")
-            st.markdown("**Strategy:** Either justify your valuation with strong numbers, or be prepared to compromise")
+        elif neg_factor < 0.8:
+            st.warning("📉 **Your valuation seems HIGH**")
+            st.markdown(f"💡 **Recommendation:**")
+            st.markdown(f"• Sharks will counter at **₹{valuation_pred_cr:.2f} Cr**")
+            st.markdown(f"• That's {abs((1-neg_factor)*100):.1f}% below your ask")
+            st.markdown(f"• **Action:** Justify valuation with strong metrics or accept lower offer")
             
         else:
-            st.info("✅ **Your valuation is realistic!**")
-            st.markdown("💡 Minor negotiations expected:")
-            min_range = valuation_pred * 0.90
-            max_range = valuation_pred * 1.10
-            st.markdown(f"- Expect final deal between **₹{min_range/100:.2f} - ₹{max_range/100:.2f} Cr**")
+            st.info("✅ **Your valuation is REALISTIC**")
+            st.markdown(f"💡 **Recommendation:**")
+            min_range = valuation_pred * 0.90 / 100
+            max_range = valuation_pred * 1.10 / 100
+            st.markdown(f"• Expected range: **₹{min_range:.2f} - ₹{max_range:.2f} Cr**")
+            st.markdown(f"• Minor negotiations expected")
         
         st.markdown("---")
-        st.markdown("### 🎯 Optimal Strategy")
+        st.markdown("### 🏆 Optimal Negotiation Strategy")
         
-        optimal_min = valuation_pred * 0.85
-        optimal_max = valuation_pred * 1.15
+        optimal_ask = valuation_pred * 1.15 / 100
+        optimal_target = valuation_pred_cr
+        optimal_floor = valuation_pred * 0.85 / 100
         
-        st.markdown(f"**Negotiation Window:** ₹{optimal_min/100:.2f} - ₹{optimal_max/100:.2f} Cr")
-        st.markdown(f"- **Start at:** ₹{optimal_max/100:.2f} Cr (leave room)")
-        st.markdown(f"- **Target:** ₹{valuation_pred_cr:.2f} Cr (model prediction)")
-        st.markdown(f"- **Bottom line:** ₹{optimal_min/100:.2f} Cr (don't go below)")
+        col_opt1, col_opt2, col_opt3 = st.columns(3)
+        
+        with col_opt1:
+            st.metric("🎯 Initial Ask", f"₹{optimal_ask:.2f} Cr", "Be ambitious")
+        with col_opt2:
+            st.metric("💼 Target Settlement", f"₹{optimal_target:.2f} Cr", "Realistic goal")
+        with col_opt3:
+            st.metric("🛑 Bottom Line", f"₹{optimal_floor:.2f} Cr", "Walk away point")
         
     else:
         st.warning("⚠️ **Valuation analysis not applicable**")
-        st.markdown("Since the deal is predicted to be **rejected**, negotiation won't happen.")
-        
-        st.markdown("---")
-        st.markdown("### 💡 To Make Your Deal Attractive:")
-        
-        target_val = valuation_pred if valuation_pred > 0 else valuation * 0.6
-        target_val_cr = target_val / 100
-        
-        st.markdown(f"**Model suggests a valuation around ₹{target_val_cr:.2f} Cr**")
-        st.markdown(f"- Current: ₹{valuation_cr:.2f} Cr")
-        st.markdown(f"- Target: ₹{target_val_cr:.2f} Cr")
-        st.markdown(f"- **Adjust equity to:** {(ask_amount / (target_val/100)):.1f}% for better chances")
+        st.markdown("Since deal rejection is predicted, focus on improving deal acceptance first.")
+        st.markdown("")
+        st.markdown("**To attract sharks:**")
+        st.markdown(f"1. Reduce valuation to **₹{(valuation * 0.6 / 100):.2f} Cr**")
+        st.markdown(f"2. Increase equity offer to **{offered_equity * 1.5:.1f}%**")
+        st.markdown("3. Show market traction and customer validation")
 
-# --- TAB 3: SHARKS ---
+# --- TAB 3: SHARK PREDICTIONS ---
 with tab3:
     st.subheader("🦈 Shark Investment Predictions")
     
     if deal_pred == 1:
-        st.markdown("💡 **Based on your pitch profile, industry, and historical patterns:**")
+        st.markdown("📌 **Based on your pitch profile and historical patterns:**")
         
-        # Create prediction table
+        # Create shark table
         shark_data = []
         for i, shark_name in enumerate(sharks):
-            prediction_text = "✅ Likely to Invest" if final_shark_pred[i] == 1 else "❌ Likely to Pass"
-            confidence = shark_probs_model[i] * 100 if len(shark_probs_model) > i else 0
+            investment_status = "✅ Likely" if final_shark_pred[i] == 1 else "❌ Unlikely"
+            confidence = shark_probs[i] * 100 if len(shark_probs) > i else 0
+            expertise = shark_expertise.get(shark_name, {})
             
             shark_data.append({
                 'Shark': shark_name,
-                'Prediction': prediction_text,
-                'Confidence': f"{confidence:.1f}%" if confidence > 0 else "N/A"
+                'Domain': expertise.get('domain', 'General'),
+                'Prediction': investment_status,
+                'Confidence': f"{confidence:.1f}%"
             })
         
         df_sharks = pd.DataFrame(shark_data)
+        st.dataframe(df_sharks, use_container_width=True, hide_index=True)
         
-        # Highlight investors
+        # Interested sharks section
         likely_investors = [sharks[i] for i, pred in enumerate(final_shark_pred) if pred == 1]
         
         if likely_investors:
-            st.success(f"**🎯 Most Likely Investors:** {', '.join(likely_investors)}")
-            st.markdown(f"🟢 *{len(likely_investors)} out of {num_sharks_present} sharks present are predicted to invest*")
+            st.success(f"✅ **Likely Investors:** {', '.join(likely_investors)}")
+            st.markdown(f"🟢 *{len(likely_investors)} out of {num_sharks_present} sharks interested*")
             
             if len(likely_investors) > 1:
-                st.info("💡 **Multiple sharks interested** - This could lead to a bidding war! Use it to your advantage.")
+                st.info("💡 **Multiple sharks interested!** This creates competition - leverage it for better terms.")
             
         else:
-            st.warning("**⚠️ Uncertain Shark Interest**")
-            st.markdown("While a deal is likely, the model is uncertain about specific sharks. This could mean:")
-            st.markdown("- 🤝 Multiple sharks might make a joint offer")
-            st.markdown("- 🎯 Your pitch appeals broadly but not strongly to anyone")
-            st.markdown("- 💡 Consider emphasizing industry-specific strengths")
-        
-        # Display table
-        st.dataframe(df_sharks, use_container_width=True, hide_index=True)
+            st.warning("⚠️ **Uncertain Shark Interest**")
+            st.markdown("While deal is likely, specific shark interest is unclear. This could mean:")
+            st.markdown("• 🤝 Joint offer from multiple sharks")
+            st.markdown("• 🎯 Appeal is broad but not strongly specialized")
+            st.markdown("• 💡 Emphasize industry-specific strengths")
         
         st.markdown("---")
-        st.markdown("### 💼 Shark Industry Preferences")
+        st.markdown("### 🏢 Shark Expertise & Strategy")
         
-        # Shark expertise (customizable based on actual data)
-        shark_expertise = {
-            'Namita': {'industries': 'Pharma, Healthcare, Beauty & Wellness', 'style': 'Data-driven, focuses on margins'},
-            'Vineeta': {'industries': 'Fashion, Lifestyle, D2C Brands', 'style': 'Brand-focused, marketing expertise'},
-            'Anupam': {'industries': 'Entertainment, Education, Services', 'style': 'Strategic networks, mentor approach'},
-            'Aman': {'industries': 'E-commerce, Logistics, Tech Platforms', 'style': 'Aggressive growth, scalability'},
-            'Peyush': {'industries': 'Tech, Electronics, Innovation', 'style': 'Product-focused, technical depth'},
-            'Ritesh': {'industries': 'Hospitality, Food & Beverage, Consumer', 'style': 'Customer experience, brand building'},
-            'Amit': {'industries': 'Fashion, Retail, Textiles', 'style': 'Manufacturing & distribution networks'}
-        }
-        
-        st.markdown(f"**Your Industry:** {industry}")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**🎯 Best Matches for Your Industry:**")
-            # You can enhance this with actual data patterns
-            for shark_name in likely_investors[:3]:
-                if shark_name in shark_expertise:
-                    info = shark_expertise[shark_name]
-                    st.markdown(f"**{shark_name}:** {info['industries']}")
-        
-        with col2:
-            st.markdown("**💡 Pitch Strategy:**")
-            for shark_name in likely_investors[:3]:
-                if shark_name in shark_expertise:
-                    info = shark_expertise[shark_name]
-                    st.markdown(f"**{shark_name}:** {info['style']}")
-        
-    else:
-        st.error("🚫 **No Shark Investment Predicted**")
-        
-        st.markdown("---")
-        st.markdown("### ❌ Why No Sharks Will Invest:")
-        st.markdown("The fundamental issue is that **the deal itself is predicted to be rejected**.")
-        st.markdown("")
-        st.markdown("Without a deal acceptance, no sharks will make offers.")
-        
-        st.markdown("---")
-        st.markdown("### 💡 Steps to Attract Sharks:")
-        
-        st.markdown("**1. Fix the Deal Structure First** 🎯")
-        st.markdown("   - Go to the 'Deal Analysis' tab for specific suggestions")
-        st.markdown("   - Improve your deal acceptance probability above 60%")
-        
-        st.markdown("**2. Optimize Your Valuation** 💰")
-        st.markdown(f"   - Current: ₹{valuation_cr:.2f} Cr (may be too high)")
-        st.markdown(f"   - Consider: ₹{valuation_pred_cr:.2f} Cr (model suggestion)")
-        
-        st.markdown("**3. Industry-Specific Appeal** 🏭")
-        st.markdown(f"   - Your industry: **{industry}**")
-        st.markdown("   - Research which sharks invest in this sector")
-        st.markdown("   - Tailor your pitch to their expertise")
-        
-        st.markdown("**4. Show Traction** 📈")
-        st.markdown("   - Strong revenue numbers")
-        st.markdown("   - Customer testimonials")
-        st.markdown("   - Clear growth trajectory")
-        
-        st.markdown("---")
-        st.info("**💡 Remember:** Sharks look for realistic valuations, strong teams, and clear ROI potential!")
-
-# ==========================
-# FOOTER
-# ==========================
-st.markdown("---")
-st.markdown("### 📚 About This Tool")
-
-with st.expander("ℹ️ How This Works"):
-    st.markdown("""
-    This AI predictor uses **Machine Learning models** trained on historical Shark Tank India data to predict:
+        for shark_name in likely_investors if likely_investors else sharks[:3]:
+            if shark_name in shark_expertise:
+                info = shark_expertise[shark_name]
+                col_info1, col_info2 = st.columns(2)
+                
+                with col_info1:
+                    st.markdown(f"**{shark_name}**")
+                    st.markdown(f"🎯 Domain: {info['domain']}")
+                
+                with col_info2:
+                    st.markdown(f"")
+                    st.markdown(f"💼 Style: {info['style']}")
+                
+                st.markdown("---")
     
-    1. **Deal Acceptance** - Classification model (Logistic Regression, Random Forest, XGBoost)
-    2. **Final Valuation** - Regression model (trained on accepted deals only)
-    3. **Shark Investment** - Multi-label classification (predicts each shark independently)
+    else:
+        st.error("🚫 **No Shark Investment Expected**")
+        st.markdown("Deal rejection predicted → No sharks will make offers")
+        st.markdown("")
+        st.markdown("### ✅ Steps to Attract Sharks:")
+        st.markdown("1. **Fix Deal Structure** - Go to Deal Analysis tab")
+        st.markdown("2. **Optimize Valuation** - Lower by 30-40%")
+        st.markdown(f"3. **Industry Focus** - Your sector: **{industry}**")
+        st.markdown("4. **Show Traction** - Revenue, growth, customers")
+
+# ============================================================
+#  FOOTER
+# ============================================================
+st.markdown("---")
+st.markdown("### 📚 About This Predictor")
+
+with st.expander("ℹ️ How It Works"):
+    st.markdown("""
+    **Machine Learning Models Used:**
+    
+    1. **Deal Classification** - Predicts if pitch will result in deal
+    2. **Valuation Regression** - Predicts final negotiated valuation
+    3. **Multi-label Shark Classifier** - Predicts individual shark interest
     
     **Key Logic:**
-    - If **NO DEAL** is predicted → **NO SHARKS** will invest (logical consistency)
-    - If **DEAL** is predicted → Model uses both ML predictions and historical industry patterns
-    - Shark predictions consider: industry fit, number of sharks present, and past investment patterns
+    - ✅ If **DEAL** predicted → Sharks may invest
+    - ❌ If **NO DEAL** predicted → No shark investments
     
-    **Accuracy:** Models are trained on real data but predictions are estimates. Use as guidance, not guarantees!
+    **Training Data:** Real Shark Tank India episodes
+    
+    **Important:** Predictions are estimates based on historical patterns. Actual results depend on pitch quality, timing, and market conditions.
     """)
 
-with st.expander("⚙️ Model Details"):
+with st.expander("⚙️ Model Information"):
     st.markdown(f"""
-    **Deal Model:** Classification (Accuracy varies by model selected)
-    **Valuation Model:** Regression (R² varies by model selected)
-    **Shark Model:** Multi-label One-vs-Rest Classification
+    **Features Used:** {len(train_cols)} parameters
     
-    **Features Used:** {len(feature_columns)} features including demographics, financial metrics, and derived features
+    **Model Components:**
+    - Deal Model: Classification (Logistic/RF/XGBoost)
+    - Valuation Model: Regression (Ridge/Lasso/RF)
+    - Shark Model: Multi-label OVR Classification
+    
+    **Data Points:** Historical Shark Tank India episodes
     """)
 
 st.markdown("---")
-st.caption("Made with ❤️ by STMP Developers • Powered by Streamlit + Scikit-Learn • Shark Tank India AI Predictor")
-st.caption("⚠️ **Disclaimer:** Predictions are based on historical data and should be used as guidance only. Actual results may vary.")
+st.caption("🦈 Shark Tank India AI Predictor • Powered by Streamlit + Scikit-Learn • Made with ❤️")
+st.caption("⚠️ Disclaimer: Predictions are estimates. Actual results may vary based on pitch execution and market conditions.")
